@@ -1,4 +1,4 @@
-name = "soundcloud-worker-api"
+name = "soundcloud-v2-worker"
 main = "src/index.js"
 compatibility_date = "2026-10-18"
 

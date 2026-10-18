@@ -1,114 +1,114 @@
-# SoundCloud Worker API
+# SoundCloud Internal v2 API Worker
 
-A small Cloudflare Worker wrapper that proxies the documented SoundCloud Public API. It supports the full REST path/method surface without maintaining a hand-written route for every operation, and normalizes common resources while preserving source fields.
+A Cloudflare Worker wrapper built around SoundCloud's **undocumented internal v2 API** at `https://api-v2.soundcloud.com`. It intentionally does **not** use `api.soundcloud.com`, the official OAuth client-credentials flow, or a SoundCloud client secret.
 
-## Project
+The v2 API is an internal web-client interface, not a supported public developer API. Routes, response fields, client IDs, playback rules, and access may change or stop working at any time. This project is read-only and designed for search, metadata, pagination, and playback URL resolution.
 
-```text
-soundcloud-worker-api/
-├── src/
-│   └── index.js
-├── wrangler.toml
-└── README.md
-```
+## Configure and deploy
 
-No framework and no build step are required.
-
-## Authentication model
-
-This project deliberately does **not** require or store a SoundCloud client secret. It sends your `SOUNDCLOUD_CLIENT_ID` as a `client_id` query parameter for public API requests. You may also pass an access token you obtained separately as `Authorization: OAuth ACCESS_TOKEN`; the Worker forwards that header for requests that require user-authorized access.
-
-**Compatibility note:** SoundCloud's current official API guide says REST requests use `Authorization: OAuth ACCESS_TOKEN`, and its documented Client Credentials token exchange uses both a client ID and a client secret. Client-ID-only query authentication is compatibility behavior and is not guaranteed to work on every endpoint of the current `api.soundcloud.com` REST API. The Worker returns upstream status/errors (including a specific authentication hint for HTTP 401/403) rather than pretending a request succeeded. A client ID alone cannot grant access to private resources or account actions that require user consent.
-
-## Install and deploy
-
-```bash
+```sh
 npm install -D wrangler
 npx wrangler login
 npx wrangler secret put SOUNDCLOUD_CLIENT_ID
 npx wrangler deploy
 ```
 
-Although a client ID is not a client secret, storing it through `wrangler secret put` keeps it out of the source file and makes setup simple. Alternatively, define `SOUNDCLOUD_CLIENT_ID` in Worker settings as a non-sensitive variable.
+Paste a client ID when prompted. The Worker reads it from the `SOUNDCLOUD_CLIENT_ID` secret and adds it to upstream requests. **Do not commit a real client ID to source control.** A client ID used by SoundCloud's web app is not equivalent to a confidential OAuth client secret; it may be visible in web-client assets and network requests. Keeping it in a Worker secret avoids hardcoding it in this repository, but does not make a public-facing Worker private.
 
-### Optional configuration
+For local development, create `.dev.vars` (do not commit it):
 
-`wrangler.toml` has these variables:
+```dotenv
+SOUNDCLOUD_CLIENT_ID="your-client-id"
+ALLOWED_ORIGINS="*"
+CACHE_TTL_SECONDS="60"
+```
 
-- `ALLOWED_ORIGINS`: comma-separated browser origins or `*` (default `*`). CORS is not access control.
-- `CACHE_TTL_SECONDS`: public JSON GET response cache lifetime, from 0 to 3600 seconds (default 60).
-
-To restrict direct access to your deployed Worker, add a Worker secret named `WORKER_API_KEY`. When present, requests must also include `X-API-Key: your-value`. Do not expose that key in a publicly distributed frontend; use your own backend if clients need a private API key.
+Then run `npx wrangler dev`.
 
 ## Endpoints
 
-### Quick aliases
+All convenience endpoints are `GET`. IDs can be numeric IDs or SoundCloud URNs where the upstream route accepts them.
 
-- `GET /` — endpoint index
-- `GET /health` — configuration and health check
-- `GET /openapi.json` — current official OpenAPI specification from SoundCloud
-- `GET /search?q=QUERY&type=tracks|users|playlists&limit=20`
-- `GET /track?id=ID_OR_URN`
-- `GET /user?id=ID_OR_URN`
-- `GET /user/tracks?id=ID_OR_URN&limit=20`
-- `GET /user/playlists?id=ID_OR_URN&limit=20`
-- `GET /playlist?id=ID_OR_URN`
-- `GET /playlist/tracks?id=ID_OR_URN&limit=20`
-- `GET /related?id=TRACK_ID_OR_URN&limit=10`
-- `GET /related/artists?id=USER_ID_OR_URN&limit=10`
-- `GET /stream?id=TRACK_ID_OR_URN` — official stream/transcoding response, not a restriction bypass
-- `GET /resolve?url=https%3A%2F%2Fsoundcloud.com%2Fartist%2Ftrack`
-- `GET /next?url=<URL-encoded-next_href>` — safely follows SoundCloud's `next_href` pagination URL
-- `GET /oembed?url=https%3A%2F%2Fsoundcloud.com%2Fartist%2Ftrack&format=json|xml`
+| Endpoint | Purpose |
+|---|---|
+| `/` | Endpoint discovery and configuration status |
+| `/health` | Health/configuration status |
+| `/search?q=...&type=tracks&limit=20` | Search tracks, users, or playlists (`type=tracks\|users\|playlists`) |
+| `/search/tracks?q=...&limit=20` | Track search |
+| `/search/users?q=...&limit=20` | User search |
+| `/search/playlists?q=...&limit=20` | Playlist search |
+| `/track?id=...` | Track metadata, including the upstream media/transcoding fields |
+| `/tracks?ids=id1,id2` | Batch track metadata; maximum 50 IDs per request |
+| `/user?id=...` | User metadata |
+| `/user/tracks?id=...&limit=20` | User uploads |
+| `/user/playlists?id=...&limit=20` | User playlists |
+| `/user/likes?id=...&limit=20` | User liked tracks |
+| `/user/followers?id=...&limit=20` | Followers |
+| `/user/followings?id=...&limit=20` | Followings |
+| `/playlist?id=...` | Playlist metadata and embedded tracks when upstream supplies them |
+| `/playlist/tracks?id=...&limit=20` | Playlist tracks |
+| `/related?id=...&limit=10` | Related tracks |
+| `/related/artists?id=...&limit=10` | Related artists |
+| `/stream?id=...` | Track metadata and resolved media transcoding URLs where available |
+| `/resolve?url=https%3A%2F%2Fsoundcloud.com%2F...` | Resolve a SoundCloud permalink |
+| `/next?url=%2Fsearch%2Ftracks%3F...&type=tracks` | Fetch the `next` path returned by a collection |
+| `/v2/<path>?<params>` | Read-only passthrough to an internal v2 path |
 
-### Full official REST API
+### Raw v2 passthrough
 
-Use `/api/` followed by any documented SoundCloud API path. The Worker forwards supported HTTP methods (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`), query parameters, request bodies, and content types to the fixed official API origin `https://api.soundcloud.com`.
-
-Examples:
+`/v2/<path>` forwards a GET request to the matching path on `api-v2.soundcloud.com`. Example:
 
 ```text
-GET    /api/tracks?q=Frank%20Ocean&limit=10&linked_partitioning=true
-GET    /api/tracks/soundcloud%3Atracks%3A123/streams
-GET    /api/tracks/123/comments?limit=25&linked_partitioning=true
-POST   /api/tracks/123/comments
-GET    /api/users/123/followers?limit=50
-GET    /api/me/likes/tracks?limit=25
-PUT    /api/me/followings/123
-POST   /api/likes/tracks/123
-DELETE /api/likes/tracks/123
-POST   /api/playlists
-PUT    /api/playlists/123
-DELETE /api/playlists/123
-POST   /api/tracks
-PUT    /api/tracks/123
-DELETE /api/tracks/123
-GET    /api/system-playlists/123
-GET    /api/resolve?url=https%3A%2F%2Fsoundcloud.com%2Fartist%2Ftrack
+/v2/search/tracks?q=ambient&limit=10
+/v2/tracks/123456789
+/v2/playlists/123456789
 ```
 
-The above are examples, not an allowlist. Because `/api/*` proxies the published API path and methods generically, additional operations in the official OpenAPI spec do not require Worker code changes. Body fields and parameters are passed to SoundCloud; the Worker does not synthesize write operations or bypass API permission checks.
+Only the fixed `api-v2.soundcloud.com` upstream host is permitted. The Worker strips any caller-supplied `client_id` and inserts the configured value. The passthrough is GET-only; it does not expose arbitrary hosts or forward request bodies.
 
-### API coverage by category
+## Pagination
 
-The current spec includes own-user/feed endpoints (`/me`), searches (`/tracks`, `/users`, `/playlists`), track uploads/metadata/streams/previews/comments/favoriters/reposters/related tracks, user profiles/followers/followings/likes/reposts/playlists/tracks/web profiles/related artists, playlists and their tracks/reposters, system playlists, likes, reposts, resolve, and OAuth-related endpoints documented by SoundCloud. `/openapi.json` exposes the latest official operation list and schemas.
+Collection responses return normalized `data.items`, `data.next`, and `data.total_results`. `data.next` is a relative internal API path with any `client_id` removed. URL-encode it when calling `/next`:
 
-## Normalized responses
+```text
+/next?url=%2Fsearch%2Ftracks%3Fq%3Dambient%26offset%3D10&type=tracks
+```
 
-JSON API responses are wrapped in `{ "data": ... }`. Track/user/playlist objects preserve their returned fields and gain common stable aliases such as `type`, `urn`, `duration_ms`, `artwork_url`, `likes_count`, and `track_count` where applicable. Collections retain the API's `collection`, `next_href`, `total_results`, and other fields, with each contained resource normalized. Errors use `{ "error": { "code", "message", "upstream_status", "details" } }` when SoundCloud returns JSON errors. Binary/audio responses and redirects are passed through.
+The `/next` route also accepts an absolute `next_href` as long as its host is exactly `api-v2.soundcloud.com`. It rejects external hosts.
 
-Pagination follows SoundCloud's own fields. To continue a collection, URL-encode the returned `next_href` and call `/next?url=...`, or use the documented `limit`, `offset`, `cursor`, and `linked_partitioning` parameters with `/api/*`. `/next` only accepts HTTPS URLs on `api.soundcloud.com`.
+## Playback notes
 
-## Playback and limits
+`/stream` attempts to resolve the track's media transcodings. When SoundCloud provides HLS AAC variants, the response reports their upstream preset, protocol, MIME type, and resolved playback URL. Playback URLs can be short-lived, track-specific, region-limited, or unavailable. The Worker does not bypass private-track permissions, subscription restrictions, geoblocking, or SoundCloud playback checks. Prefer the AAC HLS transcoding supplied by the upstream when available; SoundCloud's public API streaming guidance also describes AAC HLS as the modern stream format: https://developers.soundcloud.com/blog/api-streaming-urls/.
 
-- `/stream` returns the documented streams/transcodings JSON response. A track may be playable, preview-only, blocked, private, geo-restricted, or otherwise unavailable for off-platform playback.
-- `/oembed` uses SoundCloud's public oEmbed service, separate from the REST API.
-- SoundCloud controls rate limits, resource permissions, uploads, and whether an endpoint supports a given auth mode. This Worker forwards the response and status; it does not bypass them.
-- Public GET JSON responses may be cached in Cloudflare's data-center cache. Responses involving `/me`, stream URLs, previews, and resolve are not cached by the Worker's response cache. Cache can be disabled by setting `CACHE_TTL_SECONDS` to `0`.
+## Configuration
 
-## Official references
+- `SOUNDCLOUD_CLIENT_ID` — required Worker secret.
+- `ALLOWED_ORIGINS` — comma-separated allowed browser origins; defaults to `*` in the provided config. Restrict this for deployments used by a known frontend. CORS is not authentication.
+- `CACHE_TTL_SECONDS` — public response cache lifetime, clamped to 0–600 seconds; set to `0` to disable response caching.
 
-- API Guide: https://developers.soundcloud.com/docs
-- OpenAPI Explorer: https://developers.soundcloud.com/docs/api/explorer/
-- App credentials: https://developers.soundcloud.com/docs/api/register-app
-- Rate limits: https://developers.soundcloud.com/docs/api/rate-limits.html
+This wrapper has no built-in API-key authentication or rate limiter. Do not treat it as private just because the SoundCloud client ID is stored as a Worker secret. If deploying publicly, use Cloudflare controls appropriate to your deployment and avoid forwarding sensitive or personal user data.
+
+## Known limitations
+
+- The internal API is undocumented and unsupported for third-party use; there is no guarantee of stability or continued access.
+- Search and catalog behavior may vary by client ID, region, cookies, account state, and SoundCloud-side policy.
+- Not every track exposes every metadata field or playback transcoding.
+- Some internal endpoints may require cookies, authorization, or parameters not represented by these convenience routes.
+- `GET` passthrough does not implement write operations such as uploading, editing, liking, following, or commenting.
+- The code can be syntax-checked locally, but successful live responses depend on SoundCloud accepting the configured client ID at deployment time.
+
+## References used for reverse-engineering
+
+These are unofficial implementation references, not SoundCloud's specification:
+
+- https://github.com/cprkrn/crate-toolkit/blob/main/docs/soundcloud.md
+- https://gist.github.com/cloud11665/f1f2024d74bc0e609edfad13d7b4d906
+- https://github.com/imoonkey/openweb/blob/main/src/sites/soundcloud/DOC.md
+
+SoundCloud's official API documentation describes the separate public API, not this internal v2 interface: https://developers.soundcloud.com/docs.
+
+---
+
+## Internal API and responsibility notice
+
+**This API uses SoundCloud's undocumented internal v2 API. It is not an official SoundCloud product or supported public API. SoundCloud may change, restrict, revoke, or block client IDs and access at any time. You are responsible for the client ID you configure, for securing or replacing credentials under your control, and for ensuring that your use of this software complies with SoundCloud's Terms of Use and all other applicable rules. By using this software, you acknowledge these risks and agree to use it lawfully. This notice does not bind SoundCloud, guarantee that a client ID can be revoked or replaced by you, or determine legal liability.**
