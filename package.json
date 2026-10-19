@@ -1,0 +1,21 @@
+{
+  "name": "soundcloud-v2-api",
+  "version": "1.0.0",
+  "description": "Zero-dependency REST proxy for SoundCloud's undocumented api-v2, on Cloudflare Workers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5",
+    "typescript": "^5",
+    "wrangler": "^4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

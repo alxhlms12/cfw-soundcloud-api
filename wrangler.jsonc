@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "soundcloud-v2-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  // Optional: a SoundCloud client id. Set it to skip runtime scraping.
+  // If empty or unset, the worker scrapes one from the SoundCloud web client.
+  "vars": {
+    "CLIENT_ID": ""
+  }
+}
